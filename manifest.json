@@ -1,0 +1,34 @@
+{
+    "background":{
+        "scripts":[
+            "3rd-party/jquery-1.9.1.min.js",
+            "shared.js",
+            "models/storage/filemanager.js",
+            "fancy-settings/source/lib/store.js",
+            "background.js"
+        ]
+    },
+    "browser_action":{
+        "default_icon":"images/icons/icon_disabled.png",
+        "default_title": "PerfectPixel",
+        "default_popup":"popups/tab-not-allowed.html"
+    },
+    "content_security_policy":"script-src 'self'; object-src 'self'",
+    "default_locale": "en",
+    "description":"__MSG_extension_description__",
+    "icons":{
+        "128":"images/icons/128.png",
+        "16":"images/icons/16.png",
+        "48":"images/icons/48.png"
+    },
+    "name":"__MSG_extension_name__",
+    "manifest_version":2,
+    "options_page":"fancy-settings/source/index.html",
+    "permissions":[ "tabs", "\u003Call_urls\u003E", "unlimitedStorage" ],
+    "update_url":"http://clients2.google.com/service/update2/crx",
+    "version":"1.77",
+    "web_accessible_resources":[
+        "images/*.*",
+        "styles/style.css"
+    ]
+}

@@ -1,0 +1,299 @@
+﻿/*
+
+Copyright 2011-2014 Alex Belozerov, Ilya Stepanov
+
+This file is part of PerfectPixel.
+
+PerfectPixel is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+PerfectPixel is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with PerfectPixel.  If not, see <http://www.gnu.org/licenses/>.
+
+*/
+
+//    PPFileManager.Init(function () {
+//            PPFileManager._DeleteAllFiles();
+//    });
+
+var settings = new Store("settings", {
+    "debugMode": false,
+    "customCssCode": '',
+    "rememberPanelOpenClosedState": false,
+    "enableDeleteLayerConfirmationMessage": true,
+    "allowPositionChangeWhenLocked": true,
+    "allowHotkeysPositionChangeWhenLocked": true,
+    "enableHotkeys": true,
+    "enableMousewheelOpacity": true,
+    "NewLayerMoveToScrollPosition": true,
+    "NewLayerMakeActive": true,
+    "NewLayerShow": true,
+    "NewLayerUnlock": true
+    // + "version" property in content script = current extension version from manifest
+    // + "defaultLocale" property in content script = default locale from manifest
+});
+
+$(document).ready(function () {
+    if (!settings.get("debugMode")) {
+        if (!window.console) window.console = {};
+        var methods = ["log", "debug", "warn", "info"];
+        for (var i = 0; i < methods.length; i++) {
+            console[methods[i]] = function () { };
+        }
+    }
+
+    // because default icon is "disabled" we need to check all tabs
+    chrome.tabs.getAllInWindow(null, function(tabs){
+        for (var i = 0; i < tabs.length; i++) {
+            check_if_PP_available_for_tab(tabs[i]);
+        }
+    });
+});
+
+// here we store panel' state for every tab
+var PP_state = [];
+
+// For debug add these lines to manifest
+//  "content_scripts": [{
+//      "matches": ["<all_urls>"],
+//	  "css": [ "style.css", "jquery-ui.css" ],
+//      "js": [ "jquery-1.6.2.min.js", "jquery-ui.js", "pp-shared.js", "storage/pp-storage-localStorage.js", "storage/pp-storage-filesystem.js", "pp-content.js"]
+//  }]
+
+function togglePanel(tabId){
+    chrome.tabs.executeScript(tabId, { code: "togglePanel();" });
+}
+
+function injectIntoTab(tabId, after_injected_callback){
+    chrome.tabs.insertCSS(tabId, { file: "styles/style.css" });
+    chrome.tabs.insertCSS(tabId, { file: "styles/jquery-ui-1.10.2.modified.min.css" });
+    chrome.tabs.insertCSS(tabId, { file: "styles/compact-layers-section.css" });
+    var customCssCode = settings.get("customCssCode");
+    if (customCssCode) chrome.tabs.insertCSS(tabId, { code: customCssCode});
+
+    var scripts = [
+        '3rd-party/jquery-1.9.1.min.js',
+        '3rd-party/jquery-ui-1.10.2.min.js',
+        '3rd-party/jquery.ui.touch-punch.modified.js',
+        '3rd-party/underscore-min.js',
+        '3rd-party/backbone-min.js',
+        '3rd-party/backbone.localStorage-min.js',
+        '3rd-party/canvas-to-blob.min.js',
+        'imagetools.js',
+        'shared.js',
+        'models/model.js',
+        'models/panel.js',
+        'models/extensionService.js',
+        'models/converters/converter.js',
+        'models/converters/version-converters.js',
+        'views/view.js',
+        'content.js'
+    ];
+    function executeScripts(scripts, after_executed_callback) {
+        var script = scripts.shift();
+        if (script){
+            chrome.tabs.executeScript(null, { file: script }, function(){ executeScripts(scripts,after_executed_callback)});
+        } else {
+            after_executed_callback();
+        }
+    };
+    executeScripts(scripts,function(){
+        if (typeof(after_injected_callback) == 'function'){
+            after_injected_callback();
+        } else {
+            togglePanel(tabId);
+        }
+    });
+}
+
+function check_if_PP_available_for_tab(tab){
+    var icon = 'images/icons/icon.png';
+    if (tab.url.match(/^chrome:/) || tab.url.match(/^https:\/\/chrome.google.com\/webstore/)){
+        //do nothing
+    } else if (tab.url.match(/file:\//)){
+        // if it's a file url we need to check if PP is allowed
+        chrome.extension.isAllowedFileSchemeAccess(function(isAllowedAccess){
+            if (isAllowedAccess){
+                set_icon(icon);
+                set_popup('');
+            }
+            else {
+                set_popup('popups/file-scheme-access-not-allowed.html')
+            }
+        })
+    }
+    else {
+        // assume all other urls as available
+        set_icon(icon);
+        set_popup('');
+    }
+
+    // usefull shortcuts
+    function set_popup(popup){
+        chrome.browserAction.setPopup({tabId: tab.id, popup: popup})
+    }
+    function set_icon(icon){
+        chrome.browserAction.setIcon({path:chrome.extension.getURL(icon), tabId:tab.id })
+    }
+}
+
+chrome.tabs.onUpdated.addListener(function(tabId, changeInfo, tab) {
+    if (changeInfo.status != 'loading') return;
+    check_if_PP_available_for_tab(tab);
+});
+
+//React when a browser' action icon is clicked.
+chrome.browserAction.onClicked.addListener(function (tab) {
+    var pp_tab_state = PP_state[tab.id];
+    if(!pp_tab_state) {
+        PP_state[tab.id] = 'open';
+        injectIntoTab(tab.id);
+    } else {
+        if(pp_tab_state == 'open')
+            PP_state[tab.id] = 'closed';
+        else if (pp_tab_state == 'closed')
+            PP_state[tab.id] = 'open';
+        togglePanel(tab.id);
+    }
+});
+
+// On tab (re)load check if we need to open panel
+chrome.tabs.onUpdated.addListener(function(tabId, changeInfo) {
+    var pp_tab_state = PP_state[tabId];
+    if (!settings.get('rememberPanelOpenClosedState')){
+        // we need to set this to 'closed' to prevent issue with page reloading while panel is opened
+        //PP_state[tabId] = 'closed';
+        delete PP_state[tabId];
+        return;
+    }
+    else if (! pp_tab_state || pp_tab_state == 'closed') {
+        return;
+    }
+    // if pp_tab_state == "open" - need to open it
+    if (changeInfo.status === 'complete') { //this means that tab was loaded
+        if (! PP_state[tabId]) PP_state[tabId] = 'open';
+        injectIntoTab(tabId);
+    }
+});
+
+chrome.runtime.onMessage.addListener(
+    function(request, sender, sendResponse) {
+
+        if (request.type == PP_RequestType.getTabId){
+            sendResponse({ tabId: sender.tab.id });
+        }
+
+        else if (request.type == PP_RequestType.ExecuteScript) {
+            chrome.tabs.executeScript(sender.tab.id, request.options, function(result) {
+                sendResponse(result);
+            });
+        }
+
+        else if (request.type == PP_RequestType.OpenSettingsPage) {
+            var optionsUrl = chrome.extension.getURL('fancy-settings/source/index.html');
+
+            chrome.tabs.query({url: optionsUrl}, function(tabs) {
+                if (tabs.length) {
+                    chrome.tabs.update(tabs[0].id, {active: true});
+                } else {
+                    chrome.tabs.create({url: optionsUrl});
+                }
+                sendResponse();
+            });
+        }
+
+        // Event listener for settings
+        else if (request.type == PP_RequestType.GetExtensionOptions) {
+            var settingsObj = settings.toObject();
+            settingsObj.defaultLocale = chrome.runtime.getManifest().default_locale;
+            settingsObj.version = chrome.runtime.getManifest().version;
+            sendResponse(settingsObj);
+            /*chrome.i18n.getAcceptLanguages(function(languages) { // not used anywhere
+                settingsObj.i18n_acceptedLanguages = languages;
+                sendResponse(settingsObj);
+            })*/
+        }
+
+        // Event listener for file operations
+        else if (request.type == PP_RequestType.GETFILE
+        || request.type == PP_RequestType.ADDFILE
+        || request.type == PP_RequestType.DELETEFILE) {
+
+            PPFileManager.Init(function (responseArgs) {
+                if (request.type == PP_RequestType.GETFILE) {
+                    // GETFILE handler
+
+                    var fileName = request.fileName;
+
+                    PPFileManager.GetFile(fileName, function (ppFile) {
+                        sendPPFileResponse(ppFile, sendResponse);
+                    });
+                }
+                else if (request.type == PP_RequestType.ADDFILE) {
+                    // ADDFILE handler
+
+                    var ppFile = new PPFile();
+                    ppFile.ArrayBuffer = stringToBuffer(request.fileData);
+                    ppFile.Name = request.fileName;
+                    ppFile.MimeType = request.fileType;
+
+                    PPFileManager.SaveFile(ppFile, function (ppFileOut) {
+                        sendPPFileResponse(ppFileOut, sendResponse);
+                    });
+                }
+                else if (request.type == PP_RequestType.DELETEFILE) {
+                    // DELETEFILE handler
+                    // array can be sent as request.fileName
+                    var fileName = request.fileName;
+
+                    PPFileManager.DeleteFiles(fileName, function () {
+                        sendResponse({
+                            status: "OK"
+                        });
+                    });
+                }
+                else
+                    sendPPFileResponse(responseArgs, sendResponse);
+            });
+        }
+
+        return true;
+    }
+);
+
+// Sends message to PerfectPixel content script in specific tab
+function sendMessageToTab(tabId, data, callback)
+{
+    chrome.tabs.sendMessage(tabId, data, callback);
+}
+
+function sendPPFileResponse(ppFile, sendResponse) {
+    if (ppFile instanceof PPFile)
+        sendResponse(
+        {
+            status: "OK",
+            fileName: ppFile.Name,
+            fileType: ppFile.MimeType,
+            arrayBuffer: bufferToString(ppFile.ArrayBuffer)
+        });
+    else if (ppFile) {
+        sendResponse(
+        {
+            status: "FAIL",
+            message: ppFile.message,
+            showToUser: ppFile.showToUser
+        });
+    }
+    else
+        sendResponse(
+        {
+            status: "FAIL"
+        });
+}
